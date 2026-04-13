@@ -2,14 +2,240 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Red de Senderos - La Gomera</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        * { margin: 0; padding: 0; }
-        html, body, iframe { width: 100%; height: 100%; border: none; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; font-family: Arial, sans-serif; }
+        #map { width: 100%; height: 100%; }
+        .btn-ubicacion {
+            position: absolute;
+            bottom: 30px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            border: 2px solid rgba(0,0,0,0.2);
+            border-radius: 50%;
+            width: 46px;
+            height: 46px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+        .btn-ubicacion:hover { background: #f0f0f0; }
+        .btn-ubicacion.activo { background: #E3F2FD; border-color: #1565C0; }
+        .btn-ubicacion svg { width: 24px; height: 24px; }
+        .panel-info {
+            position: absolute;
+            top: 10px;
+            left: 55px;
+            z-index: 1000;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            padding: 10px 14px;
+            max-width: 280px;
+            font-size: 13px;
+        }
+        .panel-info h3 { font-size: 14px; color: #1B5E20; margin-bottom: 4px; }
+        .panel-info p { color: #555; margin: 2px 0; }
+        .panel-info .coords { font-family: monospace; font-size: 11px; color: #888; }
+        .leyenda {
+            position: absolute;
+            bottom: 30px;
+            left: 10px;
+            z-index: 1000;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            padding: 8px 12px;
+            font-size: 12px;
+        }
+        .leyenda-titulo { font-weight: bold; color: #1B5E20; margin-bottom: 4px; font-size: 13px; }
+        .leyenda-item { display: flex; align-items: center; margin: 3px 0; }
+        .leyenda-linea { width: 20px; height: 3px; margin-right: 8px; border-radius: 2px; }
+        .leyenda-punto { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; border: 2px solid white; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+        .cargando {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2000;
+            background: white;
+            padding: 20px 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            text-align: center;
+            font-size: 14px;
+            color: #333;
+        }
+        .cargando.oculto { display: none; }
+        .precision-gps {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            padding: 6px 12px;
+            font-size: 11px;
+            color: #555;
+            display: none;
+        }
+        .precision-gps.visible { display: block; }
+        .precision-gps .valor { font-weight: bold; color: #1B5E20; }
     </style>
 </head>
 <body>
-    <iframe src="https://www.google.com/maps/d/embed?mid=1zaUhandcr82Vunn4DXcb8g7u3xSub20&ehbc=2E312F&ll=28.117863,-17.224387&z=12"></iframe>
+    <div id="cargando" class="cargando">Cargando mapa de senderos...</div>
+    <div id="map"></div>
+    <div class="panel-info">
+        <h3>Red de Senderos</h3>
+        <p>La Gomera</p>
+        <p class="coords" id="misCoordenadas"></p>
+    </div>
+    <button class="btn-ubicacion" id="btnUbicacion" onclick="toggleUbicacion()" title="Mi ubicacion">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#333" stroke-width="2">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>
+            <circle cx="12" cy="12" r="8" stroke-dasharray="2 2"/>
+        </svg>
+    </button>
+    <div class="precision-gps" id="precisionGps">GPS: <span class="valor" id="precisionValor">--</span> m</div>
+    <div class="leyenda">
+        <div class="leyenda-titulo">Leyenda</div>
+        <div class="leyenda-item"><div class="leyenda-linea" style="background:#1B5E20"></div>Senderos</div>
+        <div class="leyenda-item"><div class="leyenda-punto" style="background:#1565C0"></div>Mi ubicacion</div>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-omnivore@0.3.4/leaflet-omnivore.min.js"></script>
+    <script>
+        var KML_FILE = "SENDEROS_LG.kml";
+        var CENTRO = [28.1178, -17.2244];
+        var ZOOM_INICIAL = 12;
+        var map;
+        var marcadorUbicacion = null;
+        var circuloPrecision = null;
+        var watchId = null;
+        var siguiendoUbicacion = false;
+
+        map = L.map('map', { center: CENTRO, zoom: ZOOM_INICIAL, zoomControl: true });
+
+        var capaEstandar = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap', maxZoom: 19
+        }).addTo(map);
+
+        var capaTopografica = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenTopoMap', maxZoom: 17
+        });
+
+        var capaSatelite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: '© Esri', maxZoom: 18
+        });
+
+        L.control.layers({
+            "Mapa estandar": capaEstandar,
+            "Topografico": capaTopografica,
+            "Satelite": capaSatelite
+        }, null, { position: 'topright' }).addTo(map);
+
+        var kmlLayer = omnivore.kml(KML_FILE)
+            .on('ready', function() {
+                this.eachLayer(function(layer) {
+                    if (layer.setStyle) {
+                        layer.setStyle({ color: '#1B5E20', weight: 4, opacity: 0.8 });
+                    }
+                    if (layer.feature && layer.feature.properties) {
+                        var props = layer.feature.properties;
+                        var nombre = props.name || props.Name || props.nombre || "Sendero";
+                        var desc = props.description || props.Description || "";
+                        var contenido = '<div style="font-family:Arial;max-width:250px;">';
+                        contenido += '<strong style="color:#1B5E20;font-size:14px;">' + nombre + '</strong>';
+                        if (desc) {
+                            var tempDiv = document.createElement("div");
+                            tempDiv.innerHTML = desc;
+                            var textoLimpio = tempDiv.textContent || tempDiv.innerText || "";
+                            if (textoLimpio.trim()) {
+                                contenido += '<br><span style="font-size:12px;color:#555;">' + textoLimpio.substring(0, 200) + '</span>';
+                            }
+                        }
+                        contenido += '</div>';
+                        layer.bindPopup(contenido);
+                    }
+                });
+                document.getElementById('cargando').classList.add('oculto');
+            })
+            .on('error', function(e) {
+                document.getElementById('cargando').innerHTML = 'No se pudo cargar el KML. Verifica que el archivo "' + KML_FILE + '" existe en el repositorio.';
+            })
+            .addTo(map);
+
+        function toggleUbicacion() {
+            if (siguiendoUbicacion) { pararUbicacion(); } else { iniciarUbicacion(); }
+        }
+
+        function iniciarUbicacion() {
+            if (!navigator.geolocation) { alert("Tu navegador no soporta geolocalizacion"); return; }
+            siguiendoUbicacion = true;
+            document.getElementById('btnUbicacion').classList.add('activo');
+            document.getElementById('precisionGps').classList.add('visible');
+            watchId = navigator.geolocation.watchPosition(
+                function(pos) {
+                    var lat = pos.coords.latitude;
+                    var lng = pos.coords.longitude;
+                    var precision = Math.round(pos.coords.accuracy);
+                    if (marcadorUbicacion) {
+                        marcadorUbicacion.setLatLng([lat, lng]);
+                        circuloPrecision.setLatLng([lat, lng]);
+                        circuloPrecision.setRadius(precision);
+                    } else {
+                        marcadorUbicacion = L.circleMarker([lat, lng], {
+                            radius: 8, fillColor: '#1565C0', color: '#FFFFFF', weight: 3, opacity: 1, fillOpacity: 0.9
+                        }).addTo(map);
+                        circuloPrecision = L.circle([lat, lng], {
+                            radius: precision, fillColor: '#1565C0', fillOpacity: 0.1, color: '#1565C0', weight: 1, opacity: 0.3
+                        }).addTo(map);
+                        marcadorUbicacion.bindPopup('<div style="font-family:Arial;text-align:center;"><strong style="color:#1565C0;">Mi ubicacion</strong></div>');
+                    }
+                    map.setView([lat, lng], Math.max(map.getZoom(), 14));
+                    document.getElementById('misCoordenadas').textContent = lat.toFixed(6) + ', ' + lng.toFixed(6);
+                    document.getElementById('precisionValor').textContent = precision;
+                    var colorPrecision = precision < 20 ? '#43A047' : precision < 50 ? '#FB8C00' : '#E53935';
+                    document.getElementById('precisionValor').style.color = colorPrecision;
+                },
+                function(error) {
+                    var msg = "Error de GPS: ";
+                    switch(error.code) {
+                        case 1: msg += "Permiso denegado. Activa la ubicacion."; break;
+                        case 2: msg += "Ubicacion no disponible."; break;
+                        case 3: msg += "Tiempo de espera agotado."; break;
+                    }
+                    alert(msg);
+                    pararUbicacion();
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+            );
+        }
+
+        function pararUbicacion() {
+            siguiendoUbicacion = false;
+            document.getElementById('btnUbicacion').classList.remove('activo');
+            document.getElementById('precisionGps').classList.remove('visible');
+            if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+            if (marcadorUbicacion) {
+                map.removeLayer(marcadorUbicacion);
+                map.removeLayer(circuloPrecision);
+                marcadorUbicacion = null;
+                circuloPrecision = null;
+            }
+            document.getElementById('misCoordenadas').textContent = '';
+        }
+
+        L.control.scale({ imperial: false, position: 'bottomright' }).addTo(map);
+    </script>
 </body>
 </html>
